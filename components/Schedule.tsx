@@ -4,7 +4,7 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 import { signOut } from "next-auth/react";
 import {
   CATEGORIES, DAYS, DAY_TAGS, resolveCategory,
-  type Category, type DayName, type Block,
+  type Category, type DayName, type Block, type CalendarEvent,
 } from "@/lib/schedule-data";
 import type { UserRole } from "@/lib/roles";
 import BlockEditor from "./BlockEditor";
@@ -41,6 +41,27 @@ function getWeekStart(d = new Date()): string {
   return dt.toISOString().split("T")[0];
 }
 
+function getWeekDates(mondayISO: string): Date[] {
+  const base = new Date(mondayISO + "T00:00:00");
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(base);
+    d.setDate(base.getDate() + i);
+    return d;
+  });
+}
+
+function isSameDay(a: Date, b: Date): boolean {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+function formatTime(d: Date): string {
+  const h = d.getHours();
+  const m = d.getMinutes();
+  const ampm = h >= 12 ? "PM" : "AM";
+  const h12 = h % 12 || 12;
+  return m === 0 ? `${h12} ${ampm}` : `${h12}:${m.toString().padStart(2, "0")} ${ampm}`;
+}
+
 // ── Component ──
 
 interface Props { userName?: string; userEmail: string; role: UserRole; }
@@ -53,9 +74,11 @@ export default function Schedule({ userName, userEmail, role }: Props) {
   const [editorBlock, setEditorBlock] = useState<Block | null | "new">(null);
   const [addAfterIdx, setAddAfterIdx] = useState<number>(-1);
   const [saving, setSaving] = useState(false);
-  const [weekStart] = useState(getWeekStart);
+  const [weekStart, setWeekStart] = useState(getWeekStart);
   const [overrideDays, setOverrideDays] = useState<string[]>([]);
   const [isOverride, setIsOverride] = useState(false);
+  const [calEvents, setCalEvents] = useState<CalendarEvent[]>([]);
+  const [calLoading, setCalLoading] = useState(false);
 
   const roleMeta = ROLE_META[role];
   const tag = TAG_META[DAY_TAGS[active]];
@@ -102,7 +125,22 @@ export default function Schedule({ userName, userEmail, role }: Props) {
     } catch {}
   }, [weekStart]);
 
-  useEffect(() => { fetchAllBlocks(); fetchOverrideInfo(); }, [fetchAllBlocks, fetchOverrideInfo]);
+  const fetchCalEvents = useCallback(async () => {
+    setCalLoading(true);
+    try {
+      const start = new Date(weekStart + "T00:00:00");
+      const end = new Date(start);
+      end.setDate(start.getDate() + 7);
+      const res = await fetch(`/api/calendar?start=${start.toISOString()}&end=${end.toISOString()}`);
+      if (res.ok) {
+        const data = await res.json();
+        setCalEvents(data.events || []);
+      } else { setCalEvents([]); }
+    } catch { setCalEvents([]); }
+    setCalLoading(false);
+  }, [weekStart]);
+
+  useEffect(() => { fetchAllBlocks(); fetchOverrideInfo(); fetchCalEvents(); }, [fetchAllBlocks, fetchOverrideInfo, fetchCalEvents]);
   useEffect(() => { fetchDayBlocks(active); }, [active, fetchDayBlocks]);
 
   // ── Weekly Totals ──
@@ -113,6 +151,39 @@ export default function Schedule({ userName, userEmail, role }: Props) {
   }, [blocks]);
 
   const daily = useMemo(() => agg(dayBlocks as any), [dayBlocks]);
+
+  // ── Calendar Derived Values ──
+
+  const weekDates = useMemo(() => getWeekDates(weekStart), [weekStart]);
+  const currentWeekStart = useMemo(() => getWeekStart(), []);
+  const isCurrentWeek = weekStart === currentWeekStart;
+  const today = useMemo(() => new Date(), []);
+
+  const calEventsByDay = useMemo(() => {
+    const grouped: Record<string, CalendarEvent[]> = {};
+    for (const d of DAYS) grouped[d] = [];
+    for (const ev of calEvents) {
+      if (ev.allDay) continue;
+      const evDate = new Date(ev.start);
+      const dow = evDate.getDay();
+      const dayName = DAYS[dow === 0 ? 6 : dow - 1];
+      if (dayName) grouped[dayName].push(ev);
+    }
+    for (const d of DAYS) grouped[d].sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
+    return grouped;
+  }, [calEvents]);
+
+  const actualWeekly = useMemo(() => {
+    const totals: Record<string, number> = {};
+    for (const ev of calEvents) {
+      if (ev.allDay) continue;
+      const hours = (new Date(ev.end).getTime() - new Date(ev.start).getTime()) / 3_600_000;
+      totals[ev.role] = (totals[ev.role] || 0) + hours;
+    }
+    return totals;
+  }, [calEvents]);
+
+  const dayCalEvents = calEventsByDay[active] || [];
 
   // ── Block CRUD ──
 
@@ -260,6 +331,7 @@ export default function Schedule({ userName, userEmail, role }: Props) {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6, marginBottom: 20 }}>
           {TRACKED.map((key) => {
             const c = CATEGORIES[key]; const hrs = weekly[key] || 0; const tgt = TARGETS[key];
+            const actual = actualWeekly[key] || 0;
             const hit = tgt !== null && Math.abs(hrs - tgt) < 1;
             return (
               <div key={key} style={{ background: "#111113", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 10, padding: "12px 10px 10px", position: "relative" }}>
@@ -270,6 +342,11 @@ export default function Schedule({ userName, userEmail, role }: Props) {
                 <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.04em", color: "#fafafa", lineHeight: 1 }}>
                   {f(hrs)}<span style={{ fontSize: 11, fontWeight: 400, color: "#3f3f46" }}>h</span>
                 </div>
+                {actual > 0 && (
+                  <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: "-0.02em", color: c.color, lineHeight: 1, marginTop: 4, opacity: 0.85 }}>
+                    {f(actual)}<span style={{ fontSize: 9, fontWeight: 400, color: "#52525b" }}>h actual</span>
+                  </div>
+                )}
                 {tgt !== null && <div style={{ fontSize: 9.5, marginTop: 3, color: hit ? "#22c55e" : "#52525b", fontWeight: 500 }}>{hit ? "✓ " : ""}target {tgt}h</div>}
               </div>
             );
@@ -277,28 +354,59 @@ export default function Schedule({ userName, userEmail, role }: Props) {
         </div>
 
         {/* Day Selector */}
-        <div style={{ display: "flex", background: "#111113", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 10, padding: 3, marginBottom: 20 }}>
-          {DAYS.map((d) => {
-            const sel = d === active; const hasOverride = overrideDays.includes(d);
-            return (
-              <button key={d} onClick={() => setActive(d)} style={{
-                flex: 1, padding: "7px 2px 5px", border: "none", borderRadius: 7,
-                background: sel ? "#1e1e21" : "transparent", color: sel ? "#fafafa" : "#3f3f46",
-                cursor: "pointer", fontSize: 11.5, fontWeight: sel ? 600 : 400, fontFamily: "inherit", textAlign: "center", transition: "all 0.1s ease", position: "relative",
-              }}>
-                {d.slice(0, 3)}
-                <div style={{ display: "flex", gap: 2, justifyContent: "center", marginTop: 3 }}>
-                  {sel && <div style={{ width: 3.5, height: 3.5, borderRadius: "50%", background: TAG_META[DAY_TAGS[d]].color }} />}
-                  {hasOverride && <div style={{ width: 3.5, height: 3.5, borderRadius: "50%", background: "#f97316" }} />}
-                </div>
-              </button>
-            );
-          })}
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ display: "flex", alignItems: "center", background: "#111113", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 10, padding: 3 }}>
+            <button
+              onClick={() => { const d = new Date(weekStart + "T00:00:00"); d.setDate(d.getDate() - 7); setWeekStart(d.toISOString().split("T")[0]); }}
+              style={{ background: "none", border: "none", color: "#3f3f46", fontSize: 16, cursor: "pointer", padding: "7px 6px", fontFamily: "inherit", lineHeight: 1 }}
+            >&#8249;</button>
+            {DAYS.map((d, i) => {
+              const sel = d === active;
+              const hasOverride = overrideDays.includes(d);
+              const date = weekDates[i];
+              const isToday = isSameDay(date, today);
+              return (
+                <button key={d} onClick={() => setActive(d)} style={{
+                  flex: 1, padding: "5px 2px 4px", border: "none", borderRadius: 7,
+                  background: sel ? "#1e1e21" : "transparent",
+                  color: sel ? "#fafafa" : isToday ? "#22c55e" : "#3f3f46",
+                  cursor: "pointer", fontSize: 10.5, fontWeight: sel ? 600 : 400, fontFamily: "inherit", textAlign: "center", transition: "all 0.1s ease",
+                }}>
+                  <div>{d.slice(0, 3)}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: "-0.02em", color: sel ? "#fafafa" : isToday ? "#22c55e" : "#52525b" }}>
+                    {date.getDate()}
+                  </div>
+                  <div style={{ display: "flex", gap: 2, justifyContent: "center", marginTop: 2 }}>
+                    {sel && <div style={{ width: 3.5, height: 3.5, borderRadius: "50%", background: TAG_META[DAY_TAGS[d]].color }} />}
+                    {hasOverride && <div style={{ width: 3.5, height: 3.5, borderRadius: "50%", background: "#f97316" }} />}
+                    {isToday && !sel && <div style={{ width: 3.5, height: 3.5, borderRadius: "50%", background: "#22c55e" }} />}
+                  </div>
+                </button>
+              );
+            })}
+            <button
+              onClick={() => { const d = new Date(weekStart + "T00:00:00"); d.setDate(d.getDate() + 7); setWeekStart(d.toISOString().split("T")[0]); }}
+              style={{ background: "none", border: "none", color: "#3f3f46", fontSize: 16, cursor: "pointer", padding: "7px 6px", fontFamily: "inherit", lineHeight: 1 }}
+            >&#8250;</button>
+          </div>
+          {!isCurrentWeek && (
+            <div style={{ textAlign: "center", marginTop: 6 }}>
+              <button
+                onClick={() => { setWeekStart(getWeekStart()); setActive(getTodayName()); }}
+                style={{ background: "#22c55e14", border: "1px solid #22c55e33", borderRadius: 6, padding: "3px 12px", fontSize: 10, fontWeight: 600, color: "#22c55e", cursor: "pointer", fontFamily: "inherit" }}
+              >Today</button>
+            </div>
+          )}
         </div>
 
         {/* Day Header */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
-          <h2 style={{ fontSize: 17, fontWeight: 700, margin: 0, letterSpacing: "-0.025em", color: "#fafafa" }}>{active}</h2>
+          <h2 style={{ fontSize: 17, fontWeight: 700, margin: 0, letterSpacing: "-0.025em", color: "#fafafa" }}>
+            {active}
+            <span style={{ fontSize: 12, fontWeight: 400, color: "#3f3f46", marginLeft: 6 }}>
+              {weekDates[DAYS.indexOf(active)].toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })}
+            </span>
+          </h2>
           {editMode && (
             <div style={{ display: "flex", gap: 6 }}>
               {!isOverride ? (
@@ -443,6 +551,56 @@ export default function Schedule({ userName, userEmail, role }: Props) {
                 >
                   + Add block
                 </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Actual Events (GCal) */}
+        {!editMode && !loading && (
+          <div style={{ marginTop: 24 }}>
+            <h3 style={{ fontSize: 13, fontWeight: 600, color: "#52525b", textTransform: "uppercase", letterSpacing: "0.04em", margin: "0 0 10px" }}>
+              Actual
+              {calLoading && <span style={{ fontWeight: 400, fontSize: 10, color: "#3f3f46", marginLeft: 8 }}>Loading…</span>}
+            </h3>
+
+            {!calLoading && dayCalEvents.length === 0 && (
+              <div style={{ padding: "16px 12px", textAlign: "center", color: "#27272a", fontSize: 12 }}>
+                No calendar events for {active}
+              </div>
+            )}
+
+            {dayCalEvents.length > 0 && (
+              <div style={{ position: "relative", paddingLeft: 18 }}>
+                <div style={{ position: "absolute", left: 5.5, top: 10, bottom: 10, width: 1, background: "rgba(255,255,255,0.04)" }} />
+                {dayCalEvents.map((ev) => {
+                  const startD = new Date(ev.start);
+                  const endD = new Date(ev.end);
+                  const hours = (endD.getTime() - startD.getTime()) / 3_600_000;
+                  const timeStr = `${formatTime(startD)} – ${formatTime(endD)}`;
+                  return (
+                    <div key={ev.id} style={{ display: "flex", alignItems: "flex-start", marginBottom: 2, position: "relative" }}>
+                      <div style={{
+                        position: "absolute", left: -12.5, top: 12, zIndex: 2,
+                        width: 6, height: 6, borderRadius: "50%", background: ev.calendarColor,
+                        border: "2px solid #0a0a0b", boxShadow: `0 0 8px ${ev.calendarColor}18`,
+                      }} />
+                      <div style={{
+                        flex: 1, padding: "8px 12px",
+                        background: `${ev.calendarColor}08`, border: `1px solid ${ev.calendarColor}20`, borderRadius: 9,
+                      }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 2 }}>
+                          <span style={{ fontSize: 10.5, fontVariantNumeric: "tabular-nums", color: "#3f3f46", fontWeight: 500 }}>{timeStr}</span>
+                          <span style={{ fontSize: 9.5, fontWeight: 600, color: ev.calendarColor, opacity: 0.85, display: "flex", alignItems: "center", gap: 3 }}>
+                            {ev.calendarLabel}
+                            <span style={{ color: "#27272a", fontWeight: 400 }}> · {f(hours)}h</span>
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 13, color: "#d4d4d8", lineHeight: 1.4 }}>{ev.summary}</div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

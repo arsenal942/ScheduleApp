@@ -22,6 +22,18 @@ export interface Block {
   hours: number;
 }
 
+export interface CalendarEvent {
+  id: string;
+  summary: string;
+  start: string;
+  end: string;
+  calendarId: string;
+  calendarLabel: string;
+  calendarColor: string;
+  role: string;
+  allDay: boolean;
+}
+
 export const CATEGORY_OPTIONS: Category[] = [
   "immutable",
   "engineroom",
