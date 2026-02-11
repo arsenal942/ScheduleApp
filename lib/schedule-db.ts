@@ -183,7 +183,7 @@ export async function getOverrideDays(
     .eq("week_start", weekStart);
 
   if (error) throw error;
-  return [...new Set((data || []).map(r => r.day))];
+  return Array.from(new Set((data || []).map(r => r.day)));
 }
 
 // ── Audit ──
