@@ -1,22 +1,36 @@
 # Schedule
 
-A personal weekly planner built for managing three concurrent roles — **Immutable**, **EngineRoom**, and **FitFocus** — with hour-level time blocking, Google Calendar integration, and executive assistant access.
+A personal weekly planner for managing three concurrent roles — **Immutable**, **EngineRoom**, and **FitFocus** — with hour-level time blocking, in-app editing, week overrides, Google Calendar integration, and executive assistant access.
 
-Built with Next.js 14, deployed as a PWA on Vercel.
+Built with Next.js 14, Supabase (Postgres), deployed as a PWA on Vercel.
 
 ---
 
 ## Why This Exists
 
-Running three jobs simultaneously requires strict time accounting. Generic calendar apps don't enforce hour targets or distinguish between roles at a glance. This app provides a fixed weekly template with exact hour allocations per role, visual clarity on where every hour goes, a role-based login so an EA can manage the schedule and calendars, and Google Calendar integration to compare planned blocks against actual events.
+Running three jobs simultaneously requires strict time accounting. Generic calendar apps don't enforce hour targets or distinguish between roles at a glance. This app provides a fixed weekly template with exact hour allocations per role, in-app editing so you or your EA can adjust blocks without touching code, one-off week overrides for schedule exceptions, and Google Calendar integration to compare planned blocks against actual events.
 
 ## Features
 
 ### Schedule View
-- Day-by-day timeline showing every block from 5 AM gym through 11 PM sleep
+- Day-by-day timeline with every block from 5 AM gym through 11 PM sleep
 - Weekly hour totals with target tracking (ER 20h, FF 21h, Immutable ~38h)
-- Colour-coded categories: work roles, commute (productive), meetings, life blocks, personal time
-- Day type indicators: office (Mon/Tue/Thu), remote (Wed/Fri), weekend
+- Colour-coded categories: work roles, commute, meetings, life blocks, personal
+- Day type indicators: office, remote, weekend
+
+### In-App Editing
+- **Edit mode** toggle in the header — tap to enter, tap to exit
+- **Edit blocks**: tap any block to change its time, category, description, or hours
+- **Add blocks**: `+` buttons between every block and at the end of the day
+- **Delete blocks**: delete button in the editor modal
+- **Reorder blocks**: ↑↓ arrows on each block to move it up or down
+- All changes persist to Supabase and are audit-logged
+
+### Week Overrides
+- **Override this week**: copies the template into a week-specific version you can edit
+- **Revert to template**: removes the override, restoring the base schedule
+- Override days show an orange dot on the day selector
+- Overrides only affect the specific week — the base template stays intact
 
 ### Auth & Access Control
 - Google OAuth via NextAuth.js
@@ -24,16 +38,27 @@ Running three jobs simultaneously requires strict time accounting. Generic calen
 - Email allowlist — only configured accounts can sign in
 - Role badge displayed in the header
 
-### Google Calendar (v1 scaffolded)
-- Full CRUD API for calendar events (read, create, update, delete)
-- Pulls from multiple calendars (one per role + personal)
-- EA accesses owner's calendars via Google's native sharing (no token delegation)
+### Google Calendar
+- Full CRUD API (read, create, update, delete) across multiple calendars
+- EA accesses owner's calendars via Google's native sharing
 - Calendar IDs configured via environment variables
 
 ### PWA
 - Installable on iOS and Android home screens
-- Standalone display mode (no browser chrome)
-- Works offline for viewing the schedule template
+- Standalone display mode
+
+---
+
+## Data Model
+
+### `template_blocks`
+The base weekly schedule. Each row is one time block (e.g. "Monday 6:45–10:00 PM, EngineRoom deep work, 3.25h"). Edits here change the recurring weekly template permanently.
+
+### `week_overrides`
+Week-specific schedule exceptions. When present for a given `week_start + day`, these blocks **replace** the template for that day only. Created by clicking "Override this week" in edit mode.
+
+### `schedule_audit`
+Every create, update, delete, reorder, and override action is logged with the performer's email and a timestamp.
 
 ---
 
@@ -46,24 +71,16 @@ Running three jobs simultaneously requires strict time accounting. Generic calen
 | FitFocus | 2.00 | 2.00 | 2.00 | 2.00 | 2.00 | 5.50 | 5.50 | **21.00h** |
 | Gym | 1.50 | 1.50 | 1.50 | 1.50 | 1.50 | 1.50 | 1.50 | **10.50h** |
 
-### Schedule Invariants
-- **Immutable** owns 9–5 every weekday. Protected and uninterrupted.
-- **EngineRoom** = exactly 20h/wk. Weekday-heavy: commute BAU + evening deep work + remote mornings.
-- **FitFocus** = 21h/wk. Light weekday BAU (2h/day), heavy weekend deep work (5.5h/day).
-- **Commute** is productive: morning train → ER BAU, evening train → FF BAU.
-- **Life blocks** are non-negotiable: Wed & Sat soccer, Fri date night, Sun church.
-- **5 AM gym. 11 PM sleep. Every day.**
-
 ---
 
 ## Tech Stack
 
 - **Framework**: [Next.js 14](https://nextjs.org) (App Router)
+- **Database**: [Supabase](https://supabase.com) (Postgres, free tier)
 - **Auth**: [NextAuth.js](https://next-auth.js.org) with Google OAuth
 - **Calendar**: Google Calendar API (REST)
 - **Hosting**: [Vercel](https://vercel.com) (free tier)
 - **Language**: TypeScript
-- **PWA**: Web App Manifest + meta tags
 
 ---
 
@@ -74,25 +91,30 @@ schedule-app/
 ├── app/
 │   ├── api/
 │   │   ├── auth/[...nextauth]/route.ts   # NextAuth handler
-│   │   └── calendar/route.ts             # GCal CRUD (GET/POST/PATCH/DELETE)
-│   ├── login/page.tsx                    # Login page with Google OAuth
-│   ├── layout.tsx                        # Root layout + PWA meta
-│   └── page.tsx                          # Main page (auth gate)
+│   │   ├── blocks/route.ts               # Template blocks CRUD + reorder
+│   │   ├── calendar/route.ts             # GCal CRUD
+│   │   └── overrides/route.ts            # Week overrides CRUD
+│   ├── login/page.tsx
+│   ├── layout.tsx
+│   └── page.tsx
 ├── components/
-│   ├── Providers.tsx                     # Session provider wrapper
-│   └── Schedule.tsx                      # Main schedule UI component
+│   ├── BlockEditor.tsx                   # Edit/create block modal
+│   ├── Providers.tsx
+│   └── Schedule.tsx                      # Main UI (view + edit modes)
 ├── lib/
-│   ├── auth.ts                           # NextAuth config + OAuth scopes
-│   ├── calendar.ts                       # GCal API helpers (fetch/create/update/delete)
-│   ├── roles.ts                          # Role definitions + permissions matrix
-│   └── schedule-data.ts                  # Weekly schedule data + types
-├── public/
-│   ├── manifest.json                     # PWA manifest
-│   ├── icon-192.png                      # App icon
-│   └── icon-512.png                      # App icon (large)
-├── .env.example                          # Environment variable template
-├── next.config.js                        # Security headers
-├── tsconfig.json
+│   ├── auth.ts                           # NextAuth config
+│   ├── calendar.ts                       # GCal API helpers
+│   ├── roles.ts                          # Role definitions + permissions
+│   ├── schedule-data.ts                  # Types, categories, seed data
+│   ├── schedule-db.ts                    # Supabase query layer
+│   └── supabase.ts                       # Supabase client
+├── scripts/
+│   └── seed.ts                           # Populate DB with initial schedule
+├── supabase/
+│   └── migration.sql                     # Database schema
+├── public/                               # PWA manifest + icons
+├── .env.example
+├── SETUP.md                              # Full setup walkthrough
 └── package.json
 ```
 
@@ -100,45 +122,14 @@ schedule-app/
 
 ## Getting Started
 
-### Prerequisites
-- Node.js 18+
-- A Google Cloud project with OAuth credentials
-- Google Calendar API enabled
-
-### 1. Clone and install
-
 ```bash
-git clone <your-repo-url>
-cd schedule-app
 npm install
+cp .env.example .env.local    # Fill in all values
+npm run seed                  # Populate Supabase with schedule
+npm run dev                   # http://localhost:3000
 ```
 
-### 2. Configure environment
-
-```bash
-cp .env.example .env.local
-```
-
-Fill in your `.env.local`:
-
-```env
-GOOGLE_CLIENT_ID=your_client_id
-GOOGLE_CLIENT_SECRET=your_client_secret
-NEXTAUTH_SECRET=<run: openssl rand -base64 32>
-NEXTAUTH_URL=http://localhost:3000
-OWNER_EMAIL=you@gmail.com
-EA_EMAIL=your-ea@gmail.com
-```
-
-### 3. Run locally
-
-```bash
-npm run dev
-```
-
-Open [http://localhost:3000](http://localhost:3000) and sign in with Google.
-
-> See [SETUP.md](./SETUP.md) for the full walkthrough including Google Cloud project setup, calendar sharing for your EA, and Vercel deployment.
+> See [SETUP.md](./SETUP.md) for the complete walkthrough: Google Cloud, Supabase, calendar sharing, Vercel deployment, and PWA installation.
 
 ---
 
@@ -147,45 +138,20 @@ Open [http://localhost:3000](http://localhost:3000) and sign in with Google.
 | | Owner | EA |
 |---|---|---|
 | View schedule | ✓ | ✓ |
-| Edit schedule blocks | ✓ | ✓ |
-| View GCal events | ✓ | ✓ |
-| Create/edit/delete GCal events | ✓ | ✓ |
+| Edit template blocks | ✓ | ✓ |
+| Create week overrides | ✓ | ✓ |
+| View/edit GCal events | ✓ | ✓ |
 | Manage app settings | ✓ | ✗ |
-| Add/remove users | ✓ | ✗ |
-
----
-
-## Google Calendar Integration
-
-The app uses Google's native calendar sharing rather than domain-wide delegation:
-
-1. **Owner** shares each calendar (Immutable, EngineRoom, FitFocus, Personal) with the EA's Google account, granting "Make changes to events" permission.
-2. **Both users** authenticate with their own Google accounts via OAuth.
-3. **Both users** access the same calendars — the owner directly, the EA via sharing.
-
-Calendar IDs are configured via environment variables (`GCAL_ID_IMMUTABLE`, `GCAL_ID_ENGINEROOM`, `GCAL_ID_FITFOCUS`, `GCAL_ID_PERSONAL`).
-
----
-
-## Deployment
-
-```bash
-# Push to a private GitHub repo, then:
-# 1. Import to Vercel
-# 2. Add all env vars in Vercel dashboard
-# 3. Update Google OAuth redirect URIs to include your Vercel URL
-# 4. Add both emails as test users in Google Cloud Console
-```
 
 ---
 
 ## Roadmap
 
-- [ ] Planned vs actual comparison view (GCal events overlaid on schedule template)
-- [ ] Database-backed schedule edits (currently template is in code)
+- [ ] Planned vs actual comparison view (GCal events overlaid on schedule)
 - [ ] Push notifications for block transitions
 - [ ] Weekly hours report auto-generated from GCal data
-- [ ] Mobile-optimised event creation flow for EA
+- [ ] Mobile-optimised event creation flow
+- [ ] Drag-and-drop block reordering
 
 ---
 

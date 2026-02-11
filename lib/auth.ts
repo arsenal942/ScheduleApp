@@ -45,12 +45,7 @@ export const authOptions: NextAuthOptions = {
   ],
   callbacks: {
     async signIn({ user }) {
-      const role = resolveRole(user.email);
-      if (!role) {
-        // Unauthorised email — block sign in
-        return false;
-      }
-      return true;
+      return resolveRole(user.email) !== null;
     },
     async jwt({ token, account }) {
       if (account) {
@@ -58,7 +53,6 @@ export const authOptions: NextAuthOptions = {
         token.refreshToken = account.refresh_token;
         token.expiresAt = account.expires_at;
       }
-      // Resolve role on every JWT refresh
       token.role = resolveRole(token.email) || undefined;
       return token;
     },
@@ -68,9 +62,6 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
   },
-  pages: {
-    signIn: "/login",
-    error: "/login",
-  },
+  pages: { signIn: "/login", error: "/login" },
   secret: process.env.NEXTAUTH_SECRET,
 };

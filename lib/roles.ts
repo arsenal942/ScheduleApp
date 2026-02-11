@@ -18,7 +18,6 @@ export function isAuthorised(email: string | null | undefined): boolean {
   return resolveRole(email) !== null;
 }
 
-// Permissions matrix
 export const PERMISSIONS = {
   owner: {
     viewSchedule: true,
